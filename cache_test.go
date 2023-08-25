@@ -11,7 +11,7 @@ import (
 	"github.com/v-grabko1999/cache/drivers"
 )
 
-func TestRisrettoDriver(t *testing.T) {
+func TestFreeCacheDriver(t *testing.T) {
 	cacheSize := 100 * 1024 * 1024
 	ch := freecache.NewCache(cacheSize)
 	debug.SetGCPercent(20)
