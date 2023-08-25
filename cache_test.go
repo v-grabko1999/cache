@@ -17,7 +17,6 @@ func TestFreeCacheDriver(t *testing.T) {
 	debug.SetGCPercent(20)
 
 	testLogic(t, cache.NewCache(drivers.NewFreeCacheDriver(ch)))
-
 }
 
 var (
