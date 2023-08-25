@@ -24,13 +24,13 @@ func (ch *Cache) GetAndDel(key []byte) (val []byte, exist bool, err error) {
 	return
 }
 
-func (ch *Cache) Set(key, val []byte, expiries int64) error {
-	return ch.dr.Set(key, val, expiries)
+func (ch *Cache) Set(key, val []byte, expiriesSecond int) error {
+	return ch.dr.Set(key, val, expiriesSecond)
 }
 
 type OnSet func() (value []byte, err error)
 
-func (ch *Cache) OnSet(key []byte, fn OnSet, expiries int64) (val []byte, err error) {
+func (ch *Cache) OnSet(key []byte, fn OnSet, expiriesSecond int) (val []byte, err error) {
 	val, exist, err := ch.Get(key)
 	if err != nil {
 		return
@@ -40,7 +40,7 @@ func (ch *Cache) OnSet(key []byte, fn OnSet, expiries int64) (val []byte, err er
 		if err != nil {
 			return
 		}
-		err = ch.Set(key, val, expiries)
+		err = ch.Set(key, val, expiriesSecond)
 	}
 	return
 }
