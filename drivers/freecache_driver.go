@@ -3,8 +3,9 @@ package drivers
 import (
 	"errors"
 
-	"github.com/coocood/freecache"
 	"github.com/v-grabko1999/cache"
+
+	"github.com/coocood/freecache"
 )
 
 func NewFreeCacheDriver(ch *freecache.Cache) cache.CacheDriver {

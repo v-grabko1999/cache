@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coocood/freecache"
 	"github.com/v-grabko1999/cache"
 	"github.com/v-grabko1999/cache/drivers"
+
+	"github.com/coocood/freecache"
 )
 
 func TestFreeCacheDriver(t *testing.T) {
