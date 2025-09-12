@@ -7,4 +7,7 @@ type CacheDriver interface {
 
 	//очищает весь кеш
 	Clear() error
+
+	//завершает запись всех значений и закрывает хранилище
+	Close() error
 }

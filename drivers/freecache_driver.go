@@ -34,8 +34,7 @@ func (rt *FreeCacheDriver) Get(key []byte) (val []byte, exist bool, err error) {
 }
 
 func (rt *FreeCacheDriver) Set(key []byte, val []byte, expiriesSecond int) error {
-	rt.ch.Set(key, val, expiriesSecond)
-	return nil
+	return rt.ch.Set(key, val, expiriesSecond)
 }
 
 func (rt *FreeCacheDriver) Del(key []byte) error {
@@ -45,5 +44,9 @@ func (rt *FreeCacheDriver) Del(key []byte) error {
 
 func (rt *FreeCacheDriver) Clear() error {
 	rt.ch.Clear()
+	return nil
+}
+
+func (rt *FreeCacheDriver) Close() error {
 	return nil
 }
