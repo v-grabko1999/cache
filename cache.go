@@ -83,3 +83,7 @@ func (ch *Cache) Chunk(name string, expiriesSecond int) (*Chunk, error) {
 func (ch *Cache) DeleteChunk(name string) error {
 	return ch.Del(getChunkKey(name))
 }
+
+func (ch *Cache) Close() error {
+	return ch.dr.Close()
+}
