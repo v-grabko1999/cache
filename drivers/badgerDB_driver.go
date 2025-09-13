@@ -5,28 +5,56 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/dgraph-io/badger/v4/options"
-	"github.com/v-grabko1999/cache"
 )
-
-func NewBadgerDBDriver(dir string) (cache.CacheDriver, error) {
-	db, err := badger.Open(badger.DefaultOptions(dir).WithCompression(options.None))
-	if err != nil {
-		return nil, err
-	}
-
-	err = db.RunValueLogGC(0.5)
-	if err != nil {
-		return nil, err
-	}
-
-	return &BadgerDBDriver{
-		db: db,
-	}, nil
-}
 
 type BadgerDBDriver struct {
 	db *badger.DB
+}
+
+func NewBadgerDBDriver(dir string) (*BadgerDBDriver, error) {
+	opts := badger.DefaultOptions(dir)
+
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	drv := &BadgerDBDriver{db: db}
+
+	// Одноразовий GC на старті — ігноруємо “no cleanup”.
+	if err := runVlogGC(db, 0.5); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	// Періодичний GC у фоні.
+	go gcLoop(db, 0.5, 15*time.Minute)
+
+	return drv, nil
+}
+
+func gcLoop(db *badger.DB, discard float64, period time.Duration) {
+	t := time.NewTicker(period)
+	defer t.Stop()
+	for range t.C {
+		_ = runVlogGC(db, discard) // м’яко ігноруємо “no cleanup”
+	}
+}
+func runVlogGC(db *badger.DB, discard float64) error {
+	for {
+		err := db.RunValueLogGC(discard)
+		switch {
+		case errors.Is(err, badger.ErrNoRewrite):
+			return nil // нічого не зібрано — це OK
+		case errors.Is(err, badger.ErrRejected):
+			return nil // GC відхилено — теж не критично
+		case err != nil:
+			return err // інші помилки — повертаємо
+		default:
+			// Щось зібрали — пробуємо ще раз, поки не отримаємо ErrNoRewrite.
+			continue
+		}
+	}
 }
 
 func (rt *BadgerDBDriver) Get(key []byte) (val []byte, exist bool, err error) {
