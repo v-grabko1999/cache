@@ -111,67 +111,126 @@
 
 ---
 
-## Chunk — іменовані групи ключів
+## Chunk — іменовані групи ключів з версіонуванням (optimistic commit)
 
-### Що таке Chunk
+`Chunk` — це іменований контейнер `map[string][]byte`, який зберігається в базовому кеші як **один payload** (gob) і працює в режимі “RAM-снапшот → commit”.
 
-Chunk — це:
-- map[string][]byte в оперативній памʼяті
-- збережений у кеші як один ключ
-- серіалізується через encoding/gob
-- записується назад лише після SaveChanges()
-
-Ключ у кеші:
-
-    cache_package_chank_<name>
+Ціль: зручно робити багато дрібних операцій (`Set/Del/Get`) у памʼяті, а в кеш записувати агреговано через `SaveChanges()`.
 
 ---
 
-### Створення та життєвий цикл
+### Ключі, які використовує Chunk
 
-    chunk, err := ch.Chunk("users", 60)
-    if err != nil {
-        panic(err)
-    }
-    defer chunk.SaveChanges()
+Для кожного `name` існують **два ключі**:
 
-ВАЖЛИВО: без SaveChanges() зміни не збережуться.
+1) Payload (дані + версія у структурі):
+- `cache_package_chank_<name>`
+
+2) Окремий ключ версії (8 байт, `uint64`, little-endian):
+- `cache_package_chank_<name>_version`
+
+---
+
+### Внутрішній формат payload
+
+Payload серіалізується через `encoding/gob` як:
+
+- `Version uint64` — версія чанку в payload
+- `Data map[string][]byte` — дані
+
+Ключі зберігаються як `string(key)` (перетворення з `[]byte`).
+
+---
+
+### Як працює loadToMemory()
+
+При створенні чанку (`Cache.Chunk(...)`) виконується `loadToMemory()`:
+
+1) Читає `_version` ключ (швидко, 8 байт).
+2) Читає payload ключ і декодує `ChunkRaw`.
+3) Перевіряє самоконсистентність:
+   - якщо `_version` існує, то `payload.Version` **має дорівнювати** `_version`.
+   - якщо `_version` **не існує**, він ініціалізується значенням `payload.Version`.
+4) Робить **глибоку копію** даних у RAM (`cloneChunkRaw`) і зберігає:
+   - `memoryData` — робочий снапшот
+   - `baseVersion` — версія, з якою завантажились
+   - `changes=false`
+
+---
+
+### SaveChanges(): “commit” з подвійною перевіркою версії
+
+`SaveChanges()` записує зміни з RAM назад у кеш як оптимістичну транзакцію:
+
+1) Якщо `changes == false` — нічого не робить.
+2) **Швидка перевірка**: читає тільки `_version` ключ.
+   - якщо `_version` відсутній — відновлює його з payload.
+   - якщо `_version != baseVersion` — повертає `ErrChunkConflict` і **не читає payload зайвий раз**.
+3) **Фінальна перевірка**: читає payload і перевіряє `payload.Version == baseVersion`.
+   - якщо ні — повертає `ErrChunkConflict` (payload).
+4) Формує `toSave`:
+   - глибока копія RAM-снапшота
+   - `toSave.Version = baseVersion + 1`
+5) Порядок запису:
+   - спочатку payload (`cache_package_chank_<name>`)
+   - потім `_version` (`cache_package_chank_<name>_version`)
+6) Після успіху:
+   - `baseVersion = toSave.Version`
+   - `memoryData = toSave`
+   - `changes = false`
+
+> `ErrChunkConflict` означає: чанк був змінений іншим writer-ом між завантаженням і комітом. Правильна реакція — retry: перезавантажити чанк і застосувати зміни знову.
 
 ---
 
 ### Операції з Chunk
 
-    chunk.Set([]byte("42"), []byte("John"))
-    chunk.Set([]byte("43"), []byte("Alice"))
+Усі операції працюють по RAM-снапшоту та позначають `changes=true` (для Set/Del/Clear/GetAndDel):
 
-    val, ok := chunk.Get([]byte("42"))
+- `Get(key)` — повертає **копію** `[]byte`
+- `Set(key, val)` — записує **копію** `[]byte`
+- `Del(key)` — видаляє ключ
+- `GetAndDel(key)` — повертає копію і видаляє ключ
+- `Clear()` — очищає всі ключі
+- `OnSet(key, fn)` — якщо ключа немає, викликає `fn()` і робить `Set`
 
-    val, ok, _ = chunk.GetAndDel([]byte("43"))
-
-    chunk.Del([]byte("42"))
-    chunk.Clear()
-
-Гарантії:
-- Chunk потокобезпечний (mutex)
-- дані копіюються при Get / Set
-- ключі зберігаються як string(key)
+`Chunk` потокобезпечний: всі методи захищені `sync.Mutex`.
 
 ---
 
-### Chunk.OnSet
+### Рекомендований шаблон використання
 
-    val, err := chunk.OnSet([]byte("settings"), func() ([]byte, error) {
-        return []byte("defaults"), nil
-    })
+`SaveChanges()` потрібно викликати явно (наприклад, раз на N секунд або в кінці транзакції логіки).
+
+Приклад з retry на конфлікт:
+
+    chunk, err := ch.Chunk("stats", 60)
+    if err != nil { panic(err) }
+
+    // Робота з RAM-снапшотом
+    chunk.Set([]byte("rpc_ok"), []byte("1"))
+
+    // Commit з retry
+    for i := 0; i < 3; i++ {
+        err = chunk.SaveChanges()
+        if err == nil {
+            break
+        }
+        if errors.Is(err, cache.ErrChunkConflict) {
+            // Перезавантажуємо чанк (найпростіше: створити новий екземпляр)
+            chunk, _ = ch.Chunk("stats", 60)
+            chunk.Set([]byte("rpc_ok"), []byte("1")) // застосувати зміни знову
+            continue
+        }
+        panic(err)
+    }
 
 ---
 
-### Видалення чанка
+### Нюанси та обмеження
 
-    _ = ch.DeleteChunk("users")
-
----
-
+- Версійний ключ `_version` зменшує зайві читання великого payload: у випадку конфлікту `SaveChanges()` “відсікається” на швидкій перевірці.
+- Запис payload і `_version` відбувається двома `Set()` без загального CAS на рівні драйвера. Для міжпроцесного сценарію це дає високий рівень практичної надійності, але не є строго атомарною транзакцією.
 ## BadgerDB (persistent кеш)
 
     drv, err := drivers.NewBadgerDBDriver("./cache-data")
