@@ -40,12 +40,12 @@
 
 `Cache` — тонка обгортка над драйвером:
 
-- Get — читання з кешу
-- Set — запис у кеш з TTL (у секундах)
-- Del / Clear / Close — делегуються драйверу
-- GetAndDel — Get + Del (помилка Del не повертається)
-- OnSet — викликає функцію лише якщо ключ відсутній
-- Chunk(name, ttl) — створює іменований чанк
+- `Get(key []byte) (val []byte, exist bool)` — повертає **копію** значення з RAM-снапшоту.
+- `Set(key, val []byte)` — записує **копію** значення в RAM, ставить `changes=true`.
+- `Del(key []byte)` — видаляє ключ у RAM, ставить `changes=true`.
+- `GetAndDel(key []byte) (val []byte, exist bool, err error)` — повертає **копію** і видаляє ключ у RAM, ставить `changes=true`. `err` наразі завжди `nil`.
+- `Clear()` — очищає всі ключі у RAM, ставить `changes=true`.
+- `OnSet(key []byte, fn OnSet) (val []byte, err error)` — якщо ключа немає, викликає `fn()` і робить `Set`.
 
 ---
 
