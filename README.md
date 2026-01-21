@@ -160,27 +160,37 @@ Payload серіалізується через `encoding/gob` як:
 
 ### SaveChanges(): “commit” з подвійною перевіркою версії
 
-`SaveChanges()` записує зміни з RAM назад у кеш як оптимістичну транзакцію:
+`SaveChanges()` фіксує зміни з RAM-снапшота назад у кеш як **оптимістичну транзакцію (CAS)**.
 
-1) Якщо `changes == false` — нічого не робить.
-2) **Швидка перевірка**: читає тільки `_version` ключ.
-   - якщо `_version` відсутній — відновлює його з payload.
-   - якщо `_version != baseVersion` — повертає `ErrChunkConflict` і **не читає payload зайвий раз**.
-3) **Фінальна перевірка**: читає payload і перевіряє `payload.Version == baseVersion`.
-   - якщо ні — повертає `ErrChunkConflict` (payload).
+1) Якщо `changes == false` — метод повертає `nil` і нічого не записує.
+
+2) **Швидка перевірка**: читає тільки ключ версії `_version`.
+   - Якщо `_version` **відсутній**, метод **відновлює** його (ініціалізує) з `payload.Version`
+     (для цього виконується одноразове читання payload).
+   - Якщо `_version` існує і `_version != baseVersion` — метод повертає
+     `ErrChunkConflict` і **завершується**, не читаючи payload зайвий раз.
+
+3) **Фінальна перевірка**: читає payload та перевіряє
+   `payload.Version == baseVersion`.
+   - Якщо ні — повертає `ErrChunkConflict` (конфлікт за payload).
+
 4) Формує `toSave`:
-   - глибока копія RAM-снапшота
-   - `toSave.Version = baseVersion + 1`
+   - глибока копія RAM-снапшота (`memoryData`);
+   - `toSave.Version = baseVersion + 1`.
+
 5) Порядок запису:
-   - спочатку payload (`cache_package_chank_<name>`)
-   - потім `_version` (`cache_package_chank_<name>_version`)
-6) Після успіху:
-   - `baseVersion = toSave.Version`
-   - `memoryData = toSave`
-   - `changes = false`
+   - спочатку payload (`cache_package_chank_<name>`);
+   - потім `_version` (`cache_package_chank_<name>_version`).
 
-> `ErrChunkConflict` означає: чанк був змінений іншим writer-ом між завантаженням і комітом. Правильна реакція — retry: перезавантажити чанк і застосувати зміни знову.
+6) Після успішного запису:
+   - `baseVersion = toSave.Version`;
+   - `memoryData = toSave`;
+   - `changes = false`.
 
+> `ErrChunkConflict` означає: чанк був змінений іншим writer-ом між
+> `loadToMemory()` і `SaveChanges()`. Правильна реакція — **retry**:
+> перезавантажити чанк, повторно застосувати зміни та викликати
+> `SaveChanges()` ще раз.
 ---
 
 ### Операції з Chunk

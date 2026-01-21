@@ -246,3 +246,75 @@ func cloneChunkRaw(src ChunkRaw) ChunkRaw {
 
 	return dst
 }
+
+// SaveChanges фіксує зміни RAM-снапшота у кеш з optimistic CAS.
+// Повертає ErrChunkConflict, якщо чанк паралельно змінив інший writer.
+func (ch *Chunk) SaveChanges() error {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	if !ch.changes {
+		return nil
+	}
+
+	// 1) зчитуємо актуальну версію з versionKey
+	verKey, verKeyExist, err := ch.loadVersionKey()
+	if err != nil {
+		return err
+	}
+
+	// 2) зчитуємо актуальний payload (ChunkRaw) з кешу
+	current, err := ch.getOrCreateChunkRaw()
+	if err != nil {
+		return err
+	}
+
+	// 3) самоконсистентність (як у loadToMemory)
+	if verKeyExist && current.Version != verKey {
+		return ErrChunkConflict
+	}
+
+	// якщо versionKey не існував — ініціалізуємо його
+	if !verKeyExist {
+		if err := ch.saveVersionKey(current.Version); err != nil {
+			return err
+		}
+		verKey = current.Version
+	}
+
+	// 4) CAS: перевіряємо, що версія не змінилась з моменту loadToMemory()
+	// baseVersion — це версія, з якою ми працювали в RAM.
+	if verKey != ch.baseVersion || current.Version != ch.baseVersion {
+		return ErrChunkConflict
+	}
+
+	// 5) готуємо новий payload
+	newVer := ch.baseVersion + 1
+
+	next := ChunkRaw{
+		Version: newVer,
+		Data:    make(map[string][]byte, len(ch.memoryData.Data)),
+	}
+
+	for k, v := range ch.memoryData.Data {
+		b := make([]byte, len(v))
+		copy(b, v)
+		next.Data[k] = b
+	}
+
+	// 6) запис payload -> потім versionKey
+	// (без транзакцій між ключами це не атомарно, але loadToMemory відловлює розсинхрон)
+	if err := ch.saveChunkRaw(next); err != nil {
+		return err
+	}
+	if err := ch.saveVersionKey(newVer); err != nil {
+		return err
+	}
+
+	// 7) оновлюємо локальний стан
+	ch.memoryData.Version = newVer
+	ch.baseVersion = newVer
+	ch.changes = false
+
+	return nil
+}
