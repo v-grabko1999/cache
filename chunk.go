@@ -83,7 +83,7 @@ func (ch *Chunk) loadToMemory() error {
 	// Самоконсистентність:
 	// якщо версія-ключ існує — вона має збігатись з версією всередині payload.
 	if verKeyExist && chunkData.Version != verKey {
-		return fmt.Errorf("chunk version mismatch: key=%d payload=%d", verKey, chunkData.Version)
+		return ErrChunkConflict
 	}
 
 	// Якщо verKey не існує — ініціалізуємо його з payload (або 0).
@@ -95,64 +95,6 @@ func (ch *Chunk) loadToMemory() error {
 
 	ch.memoryData = cloneChunkRaw(chunkData)
 	ch.baseVersion = chunkData.Version
-	ch.changes = false
-	return nil
-}
-
-func (ch *Chunk) SaveChanges() error {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-
-	if !ch.changes {
-		return nil
-	}
-
-	// 1) Швидка перевірка: читаємо тільки ключ версії
-	verKey, verKeyExist, err := ch.loadVersionKey()
-	if err != nil {
-		return err
-	}
-
-	// Якщо версійного ключа нема — це нетипово, але можна відновити з payload
-	if !verKeyExist {
-		// відновлюємо консистентно: читаємо payload і виставляємо verKey
-		current, e := ch.getOrCreateChunkRaw()
-		if e != nil {
-			return e
-		}
-		if err := ch.saveVersionKey(current.Version); err != nil {
-			return err
-		}
-		verKey = current.Version
-	}
-
-	if verKey != ch.baseVersion {
-		return fmt.Errorf("%w (очікувалось=%d, актуально=%d)", ErrChunkConflict, ch.baseVersion, verKey)
-	}
-
-	// 2) Фінальна перевірка: читаємо payload і звіряємо Version у ньому
-	current, err := ch.getOrCreateChunkRaw()
-	if err != nil {
-		return err
-	}
-	if current.Version != ch.baseVersion {
-		return fmt.Errorf("%w (payload) (очікувалось=%d, актуально=%d)", ErrChunkConflict, ch.baseVersion, current.Version)
-	}
-
-	// 3) Готуємо дані до запису
-	toSave := cloneChunkRaw(ch.memoryData)
-	toSave.Version = ch.baseVersion + 1
-
-	// 4) Пишемо payload, потім версійний ключ
-	if err := ch.saveChunkRaw(toSave); err != nil {
-		return err
-	}
-	if err := ch.saveVersionKey(toSave.Version); err != nil {
-		return err
-	}
-
-	ch.baseVersion = toSave.Version
-	ch.memoryData = toSave
 	ch.changes = false
 	return nil
 }
