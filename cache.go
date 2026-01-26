@@ -2,11 +2,12 @@ package cache
 
 import (
 	"bytes"
-	"encoding/gob"
+
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func NewCache(dr CacheDriver) *Cache {
-	return &Cache{dr}
+	return &Cache{dr: dr}
 }
 
 type Cache struct {
@@ -58,14 +59,23 @@ func (ch *Cache) Clear() error {
 	return ch.dr.Clear()
 }
 
-// Функция создания нового Chunk
 func (ch *Cache) Chunk(name string, expiriesSecond int) (*Chunk, error) {
-	_, err := ch.OnSet(getChunkKey(name), func() ([]byte, error) {
+	if _, err := ch.OnSet(getChunkKey(name), func() ([]byte, error) {
 		var buffer bytes.Buffer
-		encoder := gob.NewEncoder(&buffer)
-		err := encoder.Encode(&ChunkRaw{})
-		return buffer.Bytes(), err
-	}, expiriesSecond)
+		enc := msgpack.NewEncoder(&buffer)
+
+		// Порожній чанк (Version=0, Data=empty map) у msgpack.
+		initial := ChunkRaw{
+			Version: 0,
+			Data:    make(map[string][]byte),
+		}
+		if err := enc.Encode(&initial); err != nil {
+			return nil, err
+		}
+		return buffer.Bytes(), nil
+	}, expiriesSecond); err != nil {
+		return nil, err
+	}
 
 	chunk := &Chunk{
 		ch:             ch,
@@ -73,13 +83,13 @@ func (ch *Cache) Chunk(name string, expiriesSecond int) (*Chunk, error) {
 		expiriesSecond: expiriesSecond,
 	}
 
-	// Автоматическая загрузка данных в память в момент создания чанка
 	if err := chunk.loadToMemory(); err != nil {
 		return nil, err
 	}
 
-	return chunk, err
+	return chunk, nil
 }
+
 func (ch *Cache) DeleteChunk(name string) error {
 	return ch.Del(getChunkKey(name))
 }
